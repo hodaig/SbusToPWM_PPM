@@ -3,7 +3,7 @@
 SBus to PWM converter
 
 
-Massive refactoring (c) by Jörg-D. Rothfuchs
+Massive refactoring (c) by Jï¿½rg-D. Rothfuchs
 
 
 Refactoring based on this code:
@@ -74,6 +74,16 @@ AD6 -> GND	set current values to failsave
 //#define DEBUG
 
 //#define SIMULATE_SBUS
+
+// Uncomment for one PPM output instead of 16 PWM outputs (allows maximum of 12 channels on PPM)
+#define PPM_OUTPUT
+
+#define PPM_TSYNC_MIN_US 3500L                 // at least 5ms Low pulse at the end of the cycle for sync
+#define PPM_CHAN_COUNT 8
+#define PPM_CYCLE_LENGTH_US (PPM_CHAN_COUNT * 2200L + PPM_TSYNC_MIN_US)
+#define PPM_PULSES_IN_CYCLE (2 + PPM_CHAN_COUNT * 2)
+
+#define PPM_CHANNEL 0    // channel 0 is IO pin 2
 
 
 // Hardware pin mapping
@@ -235,6 +245,10 @@ struct t_pulses {
 	uint16_t fire;
 } Pulses[PULSE_PACKET_CNT_BY_2];
 
+#ifdef PPM_OUTPUT
+uint16_t ppmTimes[PPM_PULSES_IN_CYCLE+1];  // even indexes -> set , odd indexes -> clear
+#endif
+
 
 uint8_t* Ports[NUMBER_CHANNELS] = {
 	(uint8_t*) &PORT_IO2,
@@ -295,7 +309,30 @@ static uint8_t SerialMode = 1;
 
 
 
+#ifdef PPM_OUTPUT
 
+static uint8_t* ppmPort = Ports[PPM_CHANNEL];
+static uint8_t ppmSetBit = Bits[PPM_CHANNEL];
+static uint8_t ppmClearBit = ~Bits[PPM_CHANNEL];
+
+ISR(TIMER1_COMPA_vect)
+{
+  if (PulsesIndex < PPM_PULSES_IN_CYCLE) {
+    OCR1A = ppmTimes[PulsesIndex+1];      // next shot
+    if (0 == (PulsesIndex % 2)) // even
+      *ppmPort |= ppmSetBit;   //   set the output
+    else          // if odd
+      *ppmPort &= ppmClearBit;   //   clear the output
+  }
+
+  PulsesIndex++;
+
+  if (PulsesIndex >=  PPM_PULSES_IN_CYCLE) {
+    DISABLE_TIMER_INTERRUPT();    // pulses are finished
+    PulseOutState = IDLE;
+  }
+}
+#else
 ISR(TIMER1_COMPA_vect)
 {
 	if (PulsesIndex < PULSE_PACKET_CNT_BY_2) {
@@ -312,7 +349,7 @@ ISR(TIMER1_COMPA_vect)
 		PulseOutState = IDLE;
 	}
 }
-
+#endif
 
 // replacement of millis() and micros(), polling, no interrupts
 // micros() MUST be called at least once every 4 milliseconds
@@ -450,7 +487,7 @@ void enterFailsafe()
 {
 	uint8_t i;
 	for (i = 0; i < NUMBER_CHANNELS; i++) {
-#if 0
+#if 1
 		PulseTimes[i] = FailsafeTimes[i];
 #else
 #ifdef SIMULATE_SBUS
@@ -740,15 +777,55 @@ void setPulseTimes(uint8_t PulseStateMachine)
 	ENABLE_TIMER_INTERRUPT();			// allow interrupt to run
 }
 
+void setPpmTimes()
+{
+  uint16_t time;
+  uint8_t i;
+
+
+  DISABLE_TIMER_INTERRUPT();
+
+  cli();
+  time = (uint16_t)(TCNT1 + DELAY_CALC);      // start the pulses after calculation
+  sei();            // gives time for this code to finish
+
+  ppmTimes[0] = time;
+
+  for (i = 1; i < PPM_PULSES_IN_CYCLE; i++){
+    if (0 == (i % 2)){ // even
+      ppmTimes[i] = (uint16_t)(ppmTimes[i-2] + (PulseTimes[i/2 - 1] * PULSE_SCALE));   //   set the output
+    } else {          // if odd
+      ppmTimes[i] = (uint16_t)(ppmTimes[i-1] + T_MS_500);   //   clear the output
+    }
+  }
+  ppmTimes[PPM_PULSES_IN_CYCLE] = ppmTimes[PPM_PULSES_IN_CYCLE-1];
+
+  readSBus();
+
+  cli();
+  OCR1A = time;         // set for first interrupt
+  sei();            // gives time for this code to finish
+
+  CLEAR_TIMER_INTERRUPT();      // clear flag in case it is set
+  PulsesIndex = 0;        // start here
+  PulseOutState = PULSING;
+  ENABLE_TIMER_INTERRUPT();     // allow interrupt to run
+}
+
 
 int main(void)
 {
+#ifdef PPM_OUTPUT
+  uint32_t LastPpmStartTime = 0;
+  uint8_t ppmState = 0;
+#else
 	uint32_t Last16ChannelsStartTime = 0;
 	uint32_t Last04ChannelsStartTime = 0;
 	uint8_t PulseStateMachine = PULSE_PACKET_ROUNDS;
-
+#endif
 	setup();
 	
+
 	while (1) {
 		readSBus();
 		
@@ -758,8 +835,30 @@ int main(void)
 		if (SBusIndex >= SBUS_PACKET_LEN)
 			processSBusFrame();
 #endif
-		
 		readSBus();
+		
+#ifdef PPM_OUTPUT
+#  ifdef PPM_CONSTANT_CYCLE_LENGTH
+		if ( (IDLE == PulseOutState) && ( (micros() - LastPpmStartTime) > PPM_CYCLE_LENGTH_US)){
+		  setPpmTimes();
+		  LastPpmStartTime = micros();
+		}
+#  else
+		if(IDLE == ppmState) {
+		  // now in sync time
+		  if ( (micros() - LastPpmStartTime) > PPM_TSYNC_MIN_US) {  // time for the next cycle
+		       setPpmTimes();
+		       ppmState = PULSING;
+		  }
+		} else { // if PULSING
+		  if (IDLE == PulseOutState) {
+		       LastPpmStartTime = micros();
+		       ppmState = IDLE; // start sync time
+		  }
+		}
+#  endif
+
+#else
 		
 		if ((micros() - Last16ChannelsStartTime) > 20000) {		// time for the first pulse set
 			if (PulseStateMachine == PULSE_PACKET_ROUNDS) {
@@ -778,6 +877,7 @@ int main(void)
 				Last04ChannelsStartTime = micros();
 			}
 		}
+#endif
 		
 		readSBus();
 		
