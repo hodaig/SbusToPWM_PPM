@@ -1,5 +1,18 @@
-Arduino used as SBUS to 16-channels PWM decoder
+Arduino used as SBUS to 16-channels PWM decoder or to single line Combined PPM.
 
+## Static Configurations
+if you want 16-channels PWM output you need to comment out (or delete) the line:
+
+    #define PPM_OUTPUT 
+if you want single line Combined PPM output, all channels are combined in a single line (CPPM), the line:
+
+    #define PPM_OUTPUT
+must stay un-comment. the macro PPM_CHANNEL define the PPM output pin, the default is pin 2 (first channel) you can change it by edit the line:
+
+    #define PPM_CHANNEL 0
+
+
+## Dynamic Configurations
 Analog input A4 is used to set the failsafe times to the current received pulses.
 Connect a switch to this and connect to ground to set the failsafe.
 Failsafe is entered if no SBUS signal is being received.
