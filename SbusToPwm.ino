@@ -75,15 +75,22 @@ AD6 -> GND	set current values to failsave
 
 //#define SIMULATE_SBUS
 
+
+/*** Output protocol configuration ***/
+/*************************************/
 // Uncomment for one PPM output instead of 16 PWM outputs (allows maximum of 12 channels on PPM)
 #define PPM_OUTPUT
 
-#define PPM_TSYNC_MIN_US 3500L                 // at least 5ms Low pulse at the end of the cycle for sync
+// basic CPPM allows up to 8 channels but most of the flight controllers can receive 12 or 16 channels PPM signals, 
+// edit PPM_CHAN_COUNT correspondingly
 #define PPM_CHAN_COUNT 8
+
+// PPM_CHANNEL define the output channel for the CPPM line
+#define PPM_CHANNEL 0     // channel 0 meaning IO pin 2
+
+#define PPM_TSYNC_MIN_US 5000L                 // at least 5ms Low pulse at the end of the cycle for sync
 #define PPM_CYCLE_LENGTH_US (PPM_CHAN_COUNT * 2200L + PPM_TSYNC_MIN_US)
 #define PPM_PULSES_IN_CYCLE (2 + PPM_CHAN_COUNT * 2)
-
-#define PPM_CHANNEL 0    // channel 0 is IO pin 2
 
 
 // Hardware pin mapping
